@@ -1,0 +1,118 @@
+---
+title: "What Will You Listen To?"
+author: "Kai, Michael, and James"
+date: '2017-12-12'
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Motivation
+Recomendation is one of the hottest topics in data science and machine learning. It can be used for recomending:
+
+- movies on netflix;
+
+- products on amazon; and
+
+- songs on online music (Spotify or WSDM)
+
+We wanted to explor this further.
+
+## Objectives:
+
+Can we tell if a user will repeatedly listen to a specific song in the 1 month time frame after first hearing the song. 
+
+This can be used to  play songs that the user is likely to enjoy, thus increasing their satisfaction with WSDM.
+
+## Correlation
+```{r error=FALSE, message=FALSE, warning=FALSE, echo=FALSE,results='hide',fig.keep='all'}
+library(data.table)
+library(tidyverse)
+setwd("~/Data_607_Final_Project/")
+members = fread('members.csv')
+extra_song = fread('song_extra_info.csv')
+songs = fread('songs.csv')
+train = fread('train.csv')
+
+ members$registration_init_time <- gsub("(\\d{4})(\\d{2})(\\d{2})$",
+                                        "\\1-\\2-\\3", 
+                                        members$registration_init_time) %>% 
+  as.Date() %>% as.integer()
+
+members$expiration_date <-  gsub("(\\d{4})(\\d{2})(\\d{2})$",
+                                        "\\1-\\2-\\3", 
+                                        members$expiration_date) %>% 
+  as.Date() %>% as.integer()
+
+empty_as_na <- function(x){
+    if("factor" %in% class(x)) x <- as.character(x) ## since ifelse wont work with factors
+    ifelse(as.character(x)!="", x, NA)
+}
+
+songs <- songs %>% mutate_all(funs(empty_as_na))
+songs$composer <- ifelse(is.na(songs$composer), songs$artist_name, songs$composer) 
+songs$lyricist <- ifelse(is.na(songs$lyricist), songs$composer, songs$lyricist)
+
+# Train Join
+train <- merge(train, members, by = 'msno')
+train <- merge(train, songs, by = 'song_id')
+
+train <- train %>% mutate_all(funs(empty_as_na)) 
+
+
+train[is.na(data)] <- -1
+
+
+# This converts all data to numeric:
+# In effect, it makes everythign categorical and then assigns a number to them. 
+train <- as.data.table(train)
+for (f in names(train)){
+  if( class(train[[f]]) == "character"){
+    train[is.na(train[[f]]), eval(f) := ""]
+    train[, eval(f) := as.integer(
+      as.factor(train[[f]]))]
+  } else train[is.na(train[[f]]), eval(f) := -1]
+}
+
+
+
+
+for (n in names(train)){
+  xbar <- mean(train[[n]])
+  xsd <- sd(train[[n]])
+  train[[n]] <- (train[[n]] - xbar)/xsd
+}
+
+library(corrplot)
+m <- cor(x = train)
+corrplot(m, method = "circle")
+```
+
+## Correlation 2
+No insight into trends initially. 
+How can we make predictions?
+
+## XGBoost 
+**XGBoost**
+ 
+* Efficent
+* Accurate
+* Tree Based
+* CART (**C**lasification **A**nd **R**egression **T**ree)
+
+## Results 
+**Accuracy: val-auc:0.767018**
+
+**Expected: 0.5**
+
+## Challenges:
+
+Data Manipulation:
+
+* Converting factor level data (e.g., user ID or song name) into numeric values. 
+
+* Scaling values with (Standardization)
+
+$x^{\prime}=\frac{x - \bar{x}}{\sigma}$

@@ -1,0 +1,395 @@
+---
+title: "Webscraping to Find Key DS Skills"
+author: "Kai Lukowiak"
+date: '2017-10-28'
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+
+![](C:\Users\james\Desktop\Education\MS Data Analytics - CUNY\607- Data Acquisition and Management\Final Project\Intro_Image2.JPG)
+
+#  Library Definition
+
+**library(tidyverse)**   
+**library(feather)**  
+**library(data.table)**  
+**library(lubridate)**
+**library(viridis)**   
+**library(DT)**  
+**library(magrittr)**  
+**library(RMySQL)**  
+
+```{r Loading Packages, message=FALSE, warning=FALSE, include = FALSE}
+library(tidyverse)
+library(RMySQL)
+library(feather)
+library(data.table)
+library(viridis)
+library(DT)
+library(lubridate)
+library(magrittr)
+library(dplyr)
+library(modelr)
+options(tibble.print_max = 5, tibble.print_min = 5)
+```
+
+# Read CSV Files into Data frames 
+
+Data Files are sourced from https://www.kaggle.com/c/kkbox-music-recommendation-challenge/data. The files train.csv, songs.csv, test.csv and train.csv have been downloaded and saved into local drive.
+
+```{r   message=FALSE, warning=FALSE, results=FALSE, echo=FALSE}
+#Reading the train data set,
+#train <- as.tibble(read_csv('train.csv'))
+train <- fread('train.csv', encoding= "UTF-8", verbose=FALSE)
+#Reading the test data set,
+#test <- as.tibble(read_csv('test.csv'))
+test <- fread('test.csv', encoding= "UTF-8", verbose=FALSE)
+#Reading the members data set,
+#members <- as.tibble(read_csv('members.csv'))
+members <- fread('members.csv', encoding= "UTF-8", verbose=FALSE)
+#Reading the songs data set,
+#songs <- as.tibble(read_csv('songs.csv'))
+songs <- fread('songs.csv', encoding= "UTF-8", verbose=FALSE)
+```
+
+# Insert CSV files into MySQL Tables
+
+```{r eval = FALSE}
+mydb <- dbConnect(MySQL(), user='data607', password='testpassword', dbname='music', host='localhost')
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'members.csv'
+                  INTO TABLE members
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'train.csv'
+                  INTO TABLE train
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'test.csv'
+                  INTO TABLE test
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'songs.csv'
+                  INTO TABLE test
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+```
+
+# EDA
+
+
+```{r}
+#ins_query <- "INSERT INTO songs(song_id, song_length, genre_ids,language) VALUES (songs$song_id, songs$song_length, songs$genre_ids,songs$language)";
+
+#sqlExecute(mydb, ins_query, songs) ;
+
+#remove(train)
+
+```
+
+
+#### Top Artists
+
+```{r top artist}
+artist_cnt <- top(songs, "artist_name")
+```
+
+#### Top Lyricists
+
+```{r top lyricist}
+lyricist_count <- top(songs, "lyricist")
+```
+
+#### Top composers
+
+```{r top composer}
+composer_count <- top(songs, "composer")
+```
+
+#### Top Language
+
+```{r top language}
+language_count <- top(songs, "language")
+```
+
+
+```{r}
+art_lyr<- sum(songs$artist_name == songs$lyricist)
+lyr_com <- sum(songs$lyricist == songs$composer)
+art_com <- sum(songs$artist_name == songs$composer)
+
+```
+
+`r art_lyr` songs have same artist and lyricist name.  
+`r lyr_com` songs have same lyricist and composer name.     
+`r art_com` songs have same artist and composer name.   
+
+```{r}
+glimpse(songs)
+```
+
+Genre_id is a multi label column with a minumum label of 'one' to a maximum label of 'eight'. There are 192 unique genres. There are some missing values as well.
+
+```{r message=FALSE, warning=FALSE}
+
+genids <- songs %>% 
+  separate(genre_ids, 
+           c("one", "two", "three", "four", "five", "six", "seven", "eight"), 
+           extra="merge")
+
+genre_cnt <- genids %>% 
+  select(one:eight) %>% 
+  gather(one:eight, key="nth_id", value="genre_ids", na.rm=TRUE) %>% 
+  group_by(genre_ids) %>% count %>% arrange(desc(n)) %>% print()
+
+```
+
+##### Analysis of 'song_length'
+```{r}
+(min(songs$song_length)/1000)/60;(max(songs$song_length)/1000)/60
+
+```
+
+```{r}
+#Records that have more than 15 minutes
+ subset(songs, ((songs$song_length/1000)/60) > 15) %>% count
+```
+
+
+Song length range from 0.003 minutes to 202.89 minutes. There are 13623 records that have length more than 15 minutes.  
+
+```{r song length dist, message=FALSE, warning=FALSE}
+songs %>% 
+  mutate(song_length = song_length/6e4) %>%   ggplot(aes(song_length)) +   geom_histogram(binwidth = 0.25, fill='darkolivegreen') +
+  labs(x='Song Length', y = 'Frequency', title = 'Distribution of song length') +   xlim(0, 15)
+```
+
+
+## MEMBERS
+
+Let's look at the members df,
+
+```{r display members, echo=FALSE}
+glimpse(members)
+```
+
+In members data fram, city, bd, gender, registered via are categorical and registration init and expiration date are dates.
+
+
+```{r}
+city_1<-subset(members, city==1)
+age_0 <- subset(members,bd==0)
+
+```
+
+The functions memb_colgrp and memb_dt_cnt are defined as follows
+
+```{r members function}
+memb_colgrp <- function(df,col_name, x, y, title, xmin, xmax, ymin, ymax)
+                    {
+                      
+                    temp_df <- df %>% group_by_(col_name) %>% count() %>% arrange(desc(n))
+                    
+                    df_plot <- temp_df %>% ggplot(aes_string(col_name, "n")) + geom_col(fill='goldenrod2') + 
+                                    labs(x = x, y = y, title = title) + xlim(xmin, xmax) +  ylim(ymin, ymax) + readble_labels
+                    
+                    print(df_plot)
+                    return(temp_df)
+
+}
+
+memb_dt_cnt <- function(df, col_name, x, y, title)
+{
+                            df %>%   group_by_(month = month(col_name), year = year(col_name)) %>% 
+                                count() %>% ungroup %>% 
+                                mutate(date = as.Date(paste(as.character(year), as.character(month), '01', sep='-')))
+                                ggplot(aes(date, n))+ geom_line(color='goldenrod2', size=1) +
+                                labs(x = x,  y = y, title= title) +
+                                xlim(xmin, xmax) +  readble_labels
+}
+
+
+```
+
+### Distribution of city, bd(age), gender {.tabset}
+
+#### City
+```{r}
+glimpse(city_1)
+```
+
+
+```{r}
+members%>%group_by(city)%>%count
+```
+
+
+The value '1' have the most count. But the number 19445 seems suspicious as it is close to the number of records with zero age.  
+City = 1 is also far from other city counts.  
+
+#### Age
+
+```{r}
+
+glimpse(age_0)
+
+```
+
+There are observations with age greater than 1000 and there are observations with age less than or equal to  0 and those are ouliers as described in the data dictionary. Sorted bd vs Frequency is shown in the tibble as well as the plot.  There are 19932 records with 0 as age. This could be either outliers or missing values.  
+Plotting in the age range 1 -100 to show the real distribution.  
+
+
+```{r age tab, warning=TRUE}
+memb_colgrp(members, "bd", "Age", "Frequency", "Age Distribution", 1, 100, 0, 1000)
+```
+
+#### Gender
+
+As we see the counts of 'target' values in the train data frame, in members, the Male and female counts are almost equal. We have a lot of missing gender (19902).
+```{r gender tab, warning=TRUE}
+members %>% group_by(gender) %>%  count
+```
+
+
+#### Registered_via
+```{r}
+members %>% group_by(registered_via)%>% count
+```
+
+Registration methods seem to be dominated mainly by 4,7,9 and 3
+
+Convert the data types of the variables 'registration_init_time' and 'expiration_date' from int to date.
+
+```{r date conversion}
+# This is one of the items in the checklist. ymd is used to convert
+members %<>%  mutate(registration_init_time = ymd(registration_init_time),
+                     expiration_date = ymd(expiration_date))
+glimpse(members)  # Notice the changes inthe data type
+```
+
+### Signup vs Expiration 
+
+There are  members signed up in 2004. But mostly users signed up between later part of 2016 and early part of 2017. 
+
+```{r signup vs expiration, message=FALSE, warning=FALSE}
+
+registration_cnt <- members %>% 
+    group_by(month = month(registration_init_time), year = year(registration_init_time)) %>% 
+    count() %>%  ungroup %>%  
+   mutate(date = as.Date(paste(as.character(year), as.character(month), '01', sep='-'))) %>% 
+    arrange(desc(n)) %>%  print
+
+expiration_count <- members %>% 
+    group_by(month = month(expiration_date), year = year(expiration_date)) %>% 
+    count() %>% ungroup %>% 
+    mutate(date = as.Date(paste(as.character(year), as.character(month), '01', sep='-'))) %>% 
+    arrange(desc(n)) %>%  print
+
+registration_cnt %>% 
+  left_join(expiration_count, by="date") %>% 
+  ggplot() + geom_line(aes(date, n.x), color='goldenrod2') +
+  geom_line(aes(date, n.y), color='mediumorchid') +
+  labs(y="Frequency", title="Registration and Expiration Distribution")+
+  readble_labels
+  
+```
+
+### Missingness in members
+
+For City == 1, the values of gender and age shows that there are missing values. There are 18516 records that match all three condition. There is certainly relationship between these missingness.  
+
+```{r members missingness}
+members %>% 
+  mutate(cit_gen_age = if_else(((city == 1) & (bd == 0) & (gender == "")), 1, 0),
+         cit_gen =  if_else(((city == 1) & (gender == "")), 1, 0),
+         cit_age = if_else(((city == 1) & (bd == 0)), 1, 0),
+         gen_age =  if_else(((bd == 0) & (gender == "")), 1, 0)) %>% 
+  summarize(city_gender_age = sum(cit_gen_age),
+            city_gender = sum(cit_gen),
+            city_age = sum(cit_age),
+            gender_age =sum(gen_age))
+```
+
+
+
+## TEST
+
+Compare the test and train data frames.
+
+### Distribution of test and train on columns {.tabset}
+
+```{r}
+train_test_graph <- function(train, test, col_name, x, y)
+  {
+  test %>%  group_by_(col_name) %>%   summarize(count = n()) %>% 
+  left_join(train %>% group_by_(col_name) %>% summarize(count = n()) , by=col_name) %>% 
+  mutate(ratio = count.x/count.y) %>% 
+  rename(test_cnt = count.x, train_cnt = count.y) %>% 
+  arrange(ratio) %>%   print %>% 
+  ggplot() +
+  geom_col(aes_string(col_name, "train_cnt"), fill='brown', alpha = 0.5) +
+  geom_col(aes_string(col_name, "test_cnt"), fill='blue', alpha = 0.5) +
+  coord_flip() +  labs(x = x, y= y)+  readble_labels
+}
+```
+
+#### Source_system_tab
+
+Train had more records from with value 'my library' compared to test.
+
+```{r, message=FALSE, warning=FALSE}
+
+x<-'source system tab'
+y<-'Test/Train record Count'
+
+test %>%  group_by_("source_system_tab") %>%   summarize(count = n()) %>% 
+  left_join(train %>% group_by_("source_system_tab") %>% summarize(count = n()) , by='source_system_tab') %>% 
+  mutate(ratio = count.x/count.y) %>% 
+  rename(test_cnt = count.x, train_cnt = count.y) %>% 
+  arrange(ratio) %>%   print
+
+```
+
+
+#### Source_screen_name
+
+```{r}
+train_test_graph(train, test, col_name = "source_screen_name", "Source Screen Name", "Test/Train Count")
+```
+
+# Feature Engineering
+
+## Songs Features
+
+Features in the song data frame that shows the frequency of a particular item in the data set.
+
+```{r}
+# <> is from magrittr package that is used for assiging it back the result
+songs %<>% 
+  left_join(artist_cnt, by='artist_name') %>% left_join(lyricist_count, by='lyricist') %>% 
+  left_join(composer_count, by='composer') %>%  left_join(language_count, by='language') %>% 
+  rename(art_cnt = n.x, lyr_cnt = n.y, cmp_cnt = n.x.x, lng_cnt = n.y.y)
+
+glimpse(songs)
+```
+
+## Train Features
+
+
+
+
+Bibliography : https://www.kaggle.com/adiamaan/eda-and-feature-engineering
+
+
+

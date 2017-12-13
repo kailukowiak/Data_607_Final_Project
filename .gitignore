@@ -2,3 +2,8 @@
 .Rhistory
 *.7z
 *.csv
+.Rproj.user
+/rsconnect
+.mdl_wts.hdf5
+rsconnect 
+rsconnect

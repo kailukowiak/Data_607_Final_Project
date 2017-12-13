@@ -1,0 +1,294 @@
+---
+title: "Webscraping to Find Key DS Skills"
+author: "Kai, James, Michael"
+date: '2017-10-28'
+output:
+  prettydoc::html_pretty:
+    theme: architect
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+![](C:\Users\james\Desktop\Education\MS Data Analytics - CUNY\607- Data Acquisition and Management\Final Project\Intro_Image2.JPG)
+
+# Libraries:
+
+```{r packages, message=FALSE,error=FALSE, warning=FALSE}
+library(RMySQL)
+library(data.table)
+library(tidyverse)
+library(xgboost)
+```
+
+# Import the data:
+ 
+```{r loading, message=FALSE,error=FALSE, warning=FALSE}
+setwd("~/Data_607_Final_Project/")
+members = fread('members.csv')
+extra_song = fread('song_extra_info.csv')
+songs = fread('songs.csv')
+train = fread('train.csv')
+test <- fread('test.csv')
+```
+
+# Insert CSV files into MySQL Tables
+
+```{r eval = FALSE}
+mydb <- dbConnect(MySQL(), user='data607', password='testpassword', dbname='music', host='localhost')
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'members.csv'
+                  INTO TABLE members
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'train.csv'
+                  INTO TABLE train
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'test.csv'
+                  INTO TABLE test
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+
+dbSendQuery(mydb, "LOAD DATA LOCAL INFILE 'songs.csv'
+                  INTO TABLE test
+                  FIELDS TERMINATED by ','
+                  LINES TERMINATED BY '\n'
+                  IGNORE 1 LINES");
+```
+
+# EDA and statistics 
+
+```{r}
+library(ggplot2)
+membership.date <- as.Date(as.character(members$registration_init_time), "%Y%m%d")
+
+df <- data.frame(membership.date)
+
+x <- df %>% 
+  group_by(membership.date) %>% 
+  summarise(n = n()) %>% 
+  mutate(dow = weekdays(as.Date(membership.date))) %>% 
+  group_by(dow) %>% 
+  summarise(xBar = mean(n),
+            xSD = sd(n),
+            xSE = sd(n)/sqrt(length(n)))
+
+ggplot(data = x, aes(x = dow, y = xBar)) +
+  geom_bar(stat = 'identity', fill = 'light blue') +
+  geom_errorbar(aes(ymin=xBar-xSE, ymax=xBar+xSE))
+  
+y <- df %>% 
+  group_by(membership.date) %>% 
+  summarise(n = n()) %>% 
+  mutate(dow = weekdays(as.Date(membership.date)))
+
+
+ggplot(data = y, aes(x = dow, y = n)) +
+  geom_violin(fill = 'light blue') 
+
+```
+
+# Changing date format:
+
+Given our prefered package of `xgboost` we need all data to be numeric.
+
+```{r dateDidling}
+ members$registration_init_time <- gsub("(\\d{4})(\\d{2})(\\d{2})$",
+                                        "\\1-\\2-\\3", 
+                                        members$registration_init_time) %>% 
+  as.Date() %>% as.integer()
+
+members$expiration_date <-  gsub("(\\d{4})(\\d{2})(\\d{2})$",
+                                        "\\1-\\2-\\3", 
+                                        members$expiration_date) %>% 
+  as.Date() %>% as.integer()
+```
+
+# Dealing with NA's.
+
+```{r emptyNAFunc}
+empty_as_na <- function(x){
+    if("factor" %in% class(x)) x <- as.character(x) ## since ifelse wont work with factors
+    ifelse(as.character(x)!="", x, NA)
+}
+```
+
+This changes all `""` to `NA`. After the `NA` values are replaced with artist name or composer name. This is to compensate for many composer values being left blank. We hypothesized that if the composer or lyrisist was blank, the artist mighe actually be the composer and if not, would be a good proxy as upposed to deleting `AN` values. 
+
+```{r fillingNA}
+songs <- songs %>% mutate_all(funs(empty_as_na))
+songs$composer <- ifelse(is.na(songs$composer), songs$artist_name, songs$composer) 
+songs$lyricist <- ifelse(is.na(songs$lyricist), songs$composer, songs$lyricist)
+```
+
+# Merging data: 
+
+While it is effecent to store the data in `.csv` or database in seperate tables, the data needs to be joined to perform actual analysis. 
+
+
+```{r innerJoin}
+# Train Join
+train <- merge(train, members, by = 'msno')
+train <- merge(train, songs, by = 'song_id')
+
+# Test Join
+test <- merge(test, members, by = 'msno')
+test <- merge(test, songs, by = 'song_id')
+```
+
+
+To make sure that there are no empty values.
+
+```{r makesureNA}
+## transform all columns
+train <- train %>% mutate_all(funs(empty_as_na)) 
+test <- test %>% mutate_all(funs(empty_as_na))
+```
+
+Convert all `NA` values to -1. This is necessary for the `xgboost` package. 
+
+```{r warning=FALSE, message=FALSE, error=FALSE}
+train[is.na(data)] <- -1
+test[is.na(data)] <- -1
+```
+
+
+# Making data numerical:
+
+This was probably the hardest part. `xgboost` does not deal with factor variables so we have to substitute factors for unique numbers. 
+
+```{r}
+# This converts all data to numeric:
+# In effect, it makes everythign categorical and then assigns a number to them. 
+train <- as.data.table(train)
+test <- as.data.table(test)
+for (f in names(train)){
+  if( class(train[[f]]) == "character"){
+    train[is.na(train[[f]]), eval(f) := ""]
+    train[, eval(f) := as.integer(
+      as.factor(train[[f]]))]
+  } else train[is.na(train[[f]]), eval(f) := -1]
+}
+
+
+for (f in names(test)){
+  if( class(test[[f]]) == "character"){
+    test[is.na(test[[f]]), eval(f) := ""]
+    test[, eval(f) := as.integer(
+      as.factor(test[[f]]))]
+  } else test[is.na(test[[f]]), eval(f) := -1]
+}
+```
+
+
+## Train, test split:
+
+```{r}
+trainY <- train$target
+trainX <- train
+trainX$target <- NULL
+
+testID <- test$id
+test <- test[,-'id']
+```
+
+## Cross validation data.
+
+```{r}
+set.seed(101) # For reproducibility.
+n <- sample(nrow(trainX), .2*nrow(trainX))
+val <- trainX[n, ]
+Yval <- trainY[n]
+trainX <- trainX[-n, ]
+trainY <- trainY[-n]
+```
+
+# Scaling data:
+
+```{r}
+for (n in names(trainX)){
+  xbar <- mean(train[[n]])
+  xsd <- sd(train[[n]])
+  trainX[[n]] <- (trainX[[n]] - xbar)/xsd
+  test[[n]] <- (test[[n]] - xbar)/xsd
+  val[[n]] <- (val[[n]] - xbar)/xsd
+}
+```
+
+# Cor Plot
+```{r}
+library(corrplot)
+cordata = cbind(trainX, trainY)
+m <- cor(x = cordata)
+corrplot(m, method = "circle")
+```
+
+This does not look very promising since most variables are uncorrelated with the variable of interest. However, we will soon see the majic of `xgboost`.
+
+This is also an impressive demonstration of conditional probability and how controlling for various factors can lead to better results. 
+
+
+# Parameters
+
+After several itterations we found that overfitting was not an issue so we took a more aggressive approach to tuning the parameters.
+
+```{r}
+param = list(
+  objective ="binary:logistic", # Because only two categories
+  eval_metric = "auc", # from competiton
+  subsample = 0.95,
+  colsample_bytree = 0.45, 
+  max_depth = 10,
+  min_child = 2,
+  tree_method = "approx", 
+  eta  = 0.5, 
+  nthreads = 8
+)
+
+```
+
+```{r}
+x_train <- xgb.DMatrix(
+    as.matrix(trainX),
+    label = trainY, 
+    missing = -1)
+
+x_val <- xgb.DMatrix(
+    as.matrix(val), 
+    label = Yval, missing = -1)
+x_test <- xgb.DMatrix(as.matrix(test), missing = -1)
+
+
+model <- xgb.train(
+    data = x_train,
+    nrounds = 100, 
+    params = param,  
+    maximize = TRUE,
+    watchlist = list(val = x_val),
+    print_every_n = 10
+  )
+pred_3_e  <- predict(model, x_val)
+pred_3_t  <- predict(model, x_test) 
+
+```
+
+
+# Results:
+
+```{r}
+head(pred_3_e)
+```
+
+As you can see from our results, we did an ok job predicting out comes. In comparison to many other competitiors (although not the top level) we outperformed predictions.
+
+
+Special thanks to https://www.kaggle.com/adiamaan/eda-and-feature-engineering and https://www.kaggle.com/mrooijer/how-to-ensemble-in-r
