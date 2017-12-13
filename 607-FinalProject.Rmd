@@ -1,0 +1,81 @@
+---
+title: "data607-FinalProject"
+output: html_document
+---
+
+```{r warning=FALSE, message=FALSE}
+library(lightgbm)
+library(dplyr)
+library(modelr)
+```
+
+```{r}
+test <- read.csv("test.csv")
+ls.str(test)
+```
+
+```{r}
+train <- read.csv("train.csv")
+ls.str(train)
+```
+
+
+```{r}
+members <- read.csv("members.csv")
+members$city <- as.factor(members$city)
+members$registered_via <- as.factor(members$registered_via)
+ls.str(members)
+# city and registered_via need to be converted to categories
+```
+
+```{r}
+songs <- read.csv("songs.csv")
+songs$language <- as.factor(songs$language)
+ls.str(songs)
+# convert language to Factor
+```
+
+
+```{r}
+library(modelr)
+set.seed(1)  # Run to replicate this post
+folds <- crossv_kfold(mtcars, k = 5)
+folds
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
